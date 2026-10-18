@@ -1,57 +1,54 @@
 
 import hashlib
 import os
-from mcp.server.transport_security import TransportSecuritySettings
+import re
 from contextvars import ContextVar
 
-import uvicorn
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
-# Configure this with the email address expected by the grader.
+
+# Set EXAM_EMAIL in Render's environment variables.
 NORMALIZED_EMAIL = os.environ["EXAM_EMAIL"].strip().lower()
 
-# One value per incoming HTTP request.
+# Store the challenge independently for each request/task.
 request_challenge: ContextVar[str | None] = ContextVar(
-    "request_challenge", default=None
+    "request_challenge",
+    default=None,
 )
 
-mcp = FastMCP(
-    "exam-challenge-server",
-    transport_security=TransportSecuritySettings(
-        allowed_hosts=[
-            render_host,
-            f"{render_host}:*",
-        ],
-    ),
-)
-
-# Keep your existing @mcp.tool() function here.
-
+# Create the MCP 2.x server.
+mcp = MCPServer("exam-challenge-server")
 
 
 @mcp.tool()
 def solve_challenge() -> str:
-    """Solve the current exam challenge using the HTTP request headers."""
+    """Return the required hash for the challenge in the HTTP headers."""
+
     challenge = request_challenge.get()
 
     if challenge is None:
-        raise ValueError("Missing X-Exam-Challenge request header")
+        raise ValueError("Missing X-Exam-Challenge header")
+
+    # The grader sends 32 lowercase hexadecimal characters.
+    if not re.fullmatch(r"[0-9a-f]{32}", challenge):
+        raise ValueError("Invalid X-Exam-Challenge header")
 
     message = f"{challenge}:{NORMALIZED_EMAIL}"
     digest = hashlib.sha256(message.encode("utf-8")).hexdigest()
 
-    # Return the required 16 lowercase hexadecimal characters.
     return digest[:16]
 
 
 class ChallengeHeaderMiddleware:
-    """Capture the challenge separately for every HTTP request."""
+    """Capture the challenge from each incoming HTTP request."""
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
+            # Forward lifespan and other ASGI scopes unchanged.
             await self.app(scope, receive, send)
             return
 
@@ -69,26 +66,30 @@ class ChallengeHeaderMiddleware:
             request_challenge.reset(token)
 
 
-render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+# Render sets this environment variable for deployed services.
+render_host = os.environ.get(
+    "RENDER_EXTERNAL_HOSTNAME",
+    "localhost",
+)
 
-if not render_host:
-    raise RuntimeError("RENDER_EXTERNAL_HOSTNAME is not set")
-
+# Explicitly allow the public Render hostname to prevent HTTP 421.
 security = TransportSecuritySettings(
     allowed_hosts=[
         render_host,
         f"{render_host}:*",
+        "localhost",
+        "localhost:*",
+        "127.0.0.1",
+        "127.0.0.1:*",
     ],
 )
 
-app = ChallengeHeaderMiddleware(mcp.streamable_http_app())
+# Build the Streamable HTTP application.
+mcp_app = mcp.streamable_http_app(
+    transport_security=security,
+)
 
-
-if __name__ == "__main__":
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", "8000")),
-    )
+# Export the ASGI application for Gunicorn.
+app = ChallengeHeaderMiddleware(mcp_app)
 
 

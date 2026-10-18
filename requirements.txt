@@ -1,5 +1,7 @@
 
-mcp>=1.28,<2
-uvicorn
+mcp>=2,<3
 gunicorn
+uvicorn
+uvicorn-worker
+
 
