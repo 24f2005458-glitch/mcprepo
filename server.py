@@ -15,7 +15,18 @@ request_challenge: ContextVar[str | None] = ContextVar(
     "request_challenge", default=None
 )
 
-mcp = FastMCP("exam-challenge-server")
+mcp = FastMCP(
+    "exam-challenge-server",
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=[
+            render_host,
+            f"{render_host}:*",
+        ],
+    ),
+)
+
+# Keep your existing @mcp.tool() function here.
+
 
 
 @mcp.tool()
@@ -70,9 +81,7 @@ security = TransportSecuritySettings(
     ],
 )
 
-app = ChallengeHeaderMiddleware(
-    mcp.streamable_http_app(transport_security=security)
-)
+app = ChallengeHeaderMiddleware(mcp.streamable_http_app())
 
 
 if __name__ == "__main__":
