@@ -1,5 +1,7 @@
+
 import hashlib
 import os
+from mcp.server.transport_security import TransportSecuritySettings
 from contextvars import ContextVar
 
 import uvicorn
@@ -56,7 +58,22 @@ class ChallengeHeaderMiddleware:
             request_challenge.reset(token)
 
 
-app = ChallengeHeaderMiddleware(mcp.streamable_http_app())
+render_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+
+if not render_host:
+    raise RuntimeError("RENDER_EXTERNAL_HOSTNAME is not set")
+
+security = TransportSecuritySettings(
+    allowed_hosts=[
+        render_host,
+        f"{render_host}:*",
+    ],
+)
+
+app = ChallengeHeaderMiddleware(
+    mcp.streamable_http_app(transport_security=security)
+)
+
 
 if __name__ == "__main__":
     uvicorn.run(
